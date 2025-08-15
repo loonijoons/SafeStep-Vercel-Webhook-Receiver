@@ -1,40 +1,21 @@
-// /api/alert.js — Vercel serverless function
-import { Resend } from 'resend';
-
 export default async function handler(req, res) {
-  // only accept POSTs
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  // verify shared secret header
   const secret = req.headers['x-webhook-secret'];
   if (secret !== process.env.WEBHOOK_SECRET) return res.status(403).send('Forbidden');
 
-  // parse JSON data
-  let data = req.body;
-  if (!data || typeof data !== 'object') {
-    try { data = JSON.parse(req.body); } catch { return res.status(400).send('Bad JSON'); }
-  }
+  const data = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
 
-  // build email content
-  const subject = `Device Alert: ${data.event || 'unknown'}`;
-  const html = `
-    <h2>Device Alert</h2>
-    <pre>${JSON.stringify(data, null, 2)}</pre>
-    <p>Received at: ${new Date().toISOString()}</p>
-  `;
+  // IFTTT message
+  const text = `EVENT: ${data.event}\nMSG: ${data.msg}\nTS: ${data.ts}`;
 
-  // send email via resend
-  try {
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    await resend.emails.send({
-      from: process.env.MAIL_FROM,
-      to: process.env.MAIL_TO,
-      subject,
-      html
-    });
-  } catch (err) {
-    console.error('Email error:', err); // keep returning 200 so the device doesn’t retry forever
-  }
+  // send to IFTTT Webhooks (value1/2/3 are optional)
+  const url = `https://maker.ifttt.com/trigger/${process.env.IFTTT_EVENT}/json/with/key/${process.env.IFTTT_KEY}`;
+  await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value1: text, value2: data.event, value3: JSON.stringify(data) })
+  }).catch(() => { /* swallow errors; we still 200 so device won't storm */ });
 
   return res.status(200).json({ ok: true });
 }
