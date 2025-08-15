@@ -1,6 +1,6 @@
 // /api/alert.js
 import nodemailer from 'nodemailer';
-import { kv } from '@vercel/kv'; // requires KV_REST_API_URL / KV_REST_API_TOKEN envs
+import { kv } from '@vercel/kv';
 
 // extract only temp, humidity, steps, heartRate
 function parseMetrics(data) {
@@ -11,10 +11,8 @@ function parseMetrics(data) {
     steps:     data.steps ?? null,
     heartRate: data.heartRate ?? data.bpm ?? null
   };
-
   const msg = typeof data.msg === 'string' ? data.msg : '';
 
-  // parse from the free-form msg if still missing
   if ((metrics.tempC == null || metrics.tempF == null) && msg) {
     const m = msg.match(/Temp:\s*([\d.]+)\s*C\s*\/\s*([\d.]+)\s*F/i);
     if (m) { metrics.tempC = parseFloat(m[1]); metrics.tempF = parseFloat(m[2]); }
@@ -31,22 +29,14 @@ function parseMetrics(data) {
     const m = msg.match(/Heart\s*Rate:\s*([\d.]+)/i);
     if (m) metrics.heartRate = parseFloat(m[1]);
   }
-
   return metrics;
 }
 
 function metricsTableHTML(m) {
   const rows = [];
-  const add = (label, value) => {
-    if (value !== '' && value != null) {
-      rows.push(
-        `<tr>
-           <td style="padding:6px 10px;border:1px solid #ddd;"><b>${label}</b></td>
-           <td style="padding:6px 10px;border:1px solid #ddd;">${value}</td>
-         </tr>`
-      );
-    }
-  };
+  const add = (k, v) => v != null && v !== '' && rows.push(
+    `<tr><td style="padding:6px 10px;border:1px solid #ddd;"><b>${k}</b></td><td style="padding:6px 10px;border:1px solid #ddd;">${v}</td></tr>`
+  );
 
   const tempText = [
     m.tempC != null ? `${Number(m.tempC).toFixed(2)} °C` : null,
@@ -81,15 +71,19 @@ export default async function handler(req, res) {
     msg: data.msg || '',
     ts: data.ts ?? null,
     receivedAt,
-    metrics // only the 4 fields
+    metrics
   };
 
+  // keep last 50 entries
+  let kvOk = false;
   try {
     await kv.lpush('events', JSON.stringify(entry));
     await kv.ltrim('events', 0, 49);
+    kvOk = true;
+    console.log('[KV] Stored entry', entry.id);
   } catch (e) {
-    console.error('KV store error:', e);
-    // continue; still send email
+    console.error('[KV] store error:', e);
+    // continue; we still send email
   }
 
   // email
@@ -125,8 +119,7 @@ export default async function handler(req, res) {
     });
   } catch (e) {
     console.error('Email error:', e);
-    // don't fail webhook just for email
   }
 
-  return res.status(200).json({ ok: true });
+  return res.status(200).json({ ok: true, kvOk });
 }
