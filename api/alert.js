@@ -1,7 +1,8 @@
 // /api/alert.js
 import nodemailer from 'nodemailer';
+import { kv } from '@vercel/kv';
 
-// ---- biometrics: temp, humidity, steps, heartRate only ----
+// keep only temp/humidity/steps/heartRate
 function parseMetrics(data) {
   const metrics = {
     tempC:     data.tempC ?? null,
@@ -43,17 +44,27 @@ export default async function handler(req, res) {
   const receivedAt = Date.now();
   const metrics = parseMetrics(data);
 
-  // ---- store last event in memory (volatile) ----
-  globalThis.__lastEvent = {
-    id: `${receivedAt}-${Math.random().toString(36).slice(2, 8)}`,
+  const entry = {
+    id: `${receivedAt}-${Math.random().toString(36).slice(2,8)}`,
     event,
     msg: data.msg || '',
-    ts: data.ts ?? null,   // device timestamp
-    receivedAt,            // server timestamp
-    metrics                // {tempC,tempF,humidity,steps,heartRate}
+    ts: data.ts ?? null,    // device millis
+    receivedAt,             // server millis
+    metrics                 // temp/humidity/steps/heartRate
   };
 
-  // ---- email (Gmail App Password) ----
+  // ---- write to KV (keep last 50) ----
+  let kvOk = false;
+  try {
+    await kv.lpush('events', JSON.stringify(entry));
+    await kv.ltrim('events', 0, 49);
+    kvOk = true;
+    console.log('[KV] Stored entry', entry.id);
+  } catch (e) {
+    console.error('[KV] store error:', e);
+  }
+
+  // ---- email via Gmail (unchanged) ----
   const subject = `Device Alert: ${event}`;
   const text = [
     `EVENT: ${event}`,
@@ -63,7 +74,7 @@ export default async function handler(req, res) {
   ].join('\n');
 
   const html = `
-    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;">
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#111;">
       <h2 style="margin:0 0 8px;">Device Alert: ${event}</h2>
       <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #ddd;margin:10px 0;">
         ${metrics.tempC!=null||metrics.tempF!=null ? `<tr><td style="padding:6px 10px;border:1px solid #ddd;"><b>Temperature</b></td><td style="padding:6px 10px;border:1px solid #ddd;">${[metrics.tempC!=null?metrics.tempC.toFixed(2)+' °C':null, metrics.tempF!=null?metrics.tempF.toFixed(2)+' °F':null].filter(Boolean).join(' / ')}</td></tr>`:''}
@@ -94,5 +105,5 @@ export default async function handler(req, res) {
   }
 
   res.setHeader('Cache-Control', 'no-store');
-  return res.status(200).json({ ok: true });
+  return res.status(200).json({ ok: true, kvOk });
 }
