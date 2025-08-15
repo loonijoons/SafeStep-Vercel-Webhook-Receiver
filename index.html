@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>SafeStep — Recent Alerts</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
+    h1 { margin: 0 0 12px; }
+    .toolbar { display: flex; gap: 8px; align-items: center; margin: 8px 0 16px; }
+    button { padding: 8px 12px; border-radius: 10px; border: 1px solid #ccc; background: #f5f5f5; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 8px 10px; vertical-align: top; }
+    th { background: #fafafa; text-align: left; }
+    .muted { color: #666; font-size: 12px; }
+    .msg { white-space: pre-wrap; background: #fafafa; padding: 8px; border-radius: 8px; border: 1px solid #eee; }
+  </style>
+</head>
+<body>
+  <h1>SafeStep — Recent Alerts</h1>
+  <div class="toolbar">
+    <button id="refresh">Refresh</button>
+    <label class="muted">Auto-refresh <input type="checkbox" id="auto" checked> every 10s</label>
+  </div>
+  <div id="status" class="muted">Loading…</div>
+  <table id="table" style="display:none">
+    <thead>
+      <tr>
+        <th>When (server)</th>
+        <th>Event</th>
+        <th>Vitals</th>
+        <th>Message</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+<script>
+async function load() {
+  const status = document.getElementById('status');
+  const table = document.getElementById('table');
+  const tbody = document.getElementById('tbody');
+  status.textContent = 'Loading…';
+
+  try {
+    const res = await fetch('/api/recent');
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Unknown error');
+
+    tbody.innerHTML = '';
+    data.items.forEach(item => {
+      const tr = document.createElement('tr');
+
+      const when = new Date(item.receivedAt || Date.now()).toLocaleString();
+      const tdWhen = document.createElement('td'); tdWhen.textContent = when; tr.appendChild(tdWhen);
+
+      const tdEvt = document.createElement('td'); tdEvt.textContent = item.event || '—'; tr.appendChild(tdEvt);
+
+      const m = item.metrics || {};
+      const lines = [];
+      if (m.tempC != null || m.tempF != null) {
+        const c = m.tempC != null ? m.tempC.toFixed?.(2) + ' °C' : null;
+        const f = m.tempF != null ? m.tempF.toFixed?.(2) + ' °F' : null;
+        lines.push([c, f].filter(Boolean).join(' / '));
+      }
+      if (m.humidity != null)  lines.push(`${m.humidity.toFixed?.(2)} %`);
+      if (m.steps != null)     lines.push(`${m.steps} steps`);
+      if (m.heartRate != null) lines.push(`${m.heartRate.toFixed?.(1)} bpm`);
+
+      const tdVitals = document.createElement('td'); tdVitals.innerHTML = lines.filter(Boolean).join('<br>') || '—'; tr.appendChild(tdVitals);
+
+      const tdMsg = document.createElement('td');
+      tdMsg.innerHTML = item.msg ? `<div class="msg">${item.msg.replace(/\n/g,'<br>')}</div>` : '—';
+      tr.appendChild(tdMsg);
+
+      tbody.appendChild(tr);
+    });
+
+    table.style.display = '';
+    status.textContent = `${data.count} event(s)`;
+  } catch (e) {
+    table.style.display = 'none';
+    status.textContent = 'Error loading events: ' + e.message;
+  }
+}
+
+document.getElementById('refresh').addEventListener('click', load);
+let timer = null;
+document.getElementById('auto').addEventListener('change', e => {
+  if (e.target.checked) { load(); timer = setInterval(load, 10000); }
+  else { clearInterval(timer); timer = null; }
+});
+load();
+timer = setInterval(load, 10000);
+</script>
+</body>
+</html>

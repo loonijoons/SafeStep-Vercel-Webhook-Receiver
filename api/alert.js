@@ -1,20 +1,20 @@
 // /api/alert.js
 import nodemailer from 'nodemailer';
-//
+import { kv } from '@vercel/kv'; // requires KV_REST_API_URL / KV_REST_API_TOKEN envs
 
-// try to extract metrics. prefer structured fields if present; otherwise parse from msg text.
+// extract only temp, humidity, steps, heartRate
 function parseMetrics(data) {
   const metrics = {
     tempC:     data.tempC ?? null,
     tempF:     data.tempF ?? null,
     humidity:  data.humidity ?? null,
     steps:     data.steps ?? null,
-    heartRate: data.heartRate ?? data.bpm ?? null,
+    heartRate: data.heartRate ?? data.bpm ?? null
   };
 
   const msg = typeof data.msg === 'string' ? data.msg : '';
 
-  // parse from the free-form msg if any metric is still missing
+  // parse from the free-form msg if still missing
   if ((metrics.tempC == null || metrics.tempF == null) && msg) {
     const m = msg.match(/Temp:\s*([\d.]+)\s*C\s*\/\s*([\d.]+)\s*F/i);
     if (m) { metrics.tempC = parseFloat(m[1]); metrics.tempF = parseFloat(m[2]); }
@@ -59,11 +59,7 @@ function metricsTableHTML(m) {
   if (m.heartRate != null) add('Heart Rate', `${Number(m.heartRate).toFixed(1)} bpm`);
 
   if (!rows.length) return '';
-  return `
-    <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #ddd;margin:10px 0;">
-      ${rows.join('\n')}
-    </table>
-  `;
+  return `<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #ddd;margin:10px 0;">${rows.join('')}</table>`;
 }
 
 export default async function handler(req, res) {
@@ -75,53 +71,62 @@ export default async function handler(req, res) {
   const data = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
 
   const event = data.event || 'unknown';
-  const subject = `Device Alert: ${event}`;
+  const receivedAt = Date.now();
+  const metrics = parseMetrics(data);
 
-  // include a text version
+  // keep last 50 for database
+  const entry = {
+    id: `${receivedAt}-${Math.random().toString(36).slice(2, 8)}`,
+    event,
+    msg: data.msg || '',
+    ts: data.ts ?? null,
+    receivedAt,
+    metrics // only the 4 fields
+  };
+
+  try {
+    await kv.lpush('events', JSON.stringify(entry));
+    await kv.ltrim('events', 0, 49);
+  } catch (e) {
+    console.error('KV store error:', e);
+    // continue; still send email
+  }
+
+  // email
+  const subject = `Device Alert: ${event}`;
   const text = [
     `EVENT: ${event}`,
     `MSG: ${data.msg}`,
     `TS: ${data.ts}`,
-    `Received: ${new Date().toISOString()}`
+    `Received: ${new Date(receivedAt).toISOString()}`
   ].join('\n');
-
-  // build HTML with a vitals table
-  const metrics = parseMetrics(data);
-  const table = metricsTableHTML(metrics);
-  const msgHtml = (data.msg || '').replace(/\n/g, '<br>');
 
   const html = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;">
       <h2 style="margin:0 0 8px;">Device Alert: ${event}</h2>
-      ${table || ''}
+      ${metricsTableHTML(metrics)}
       <h3 style="margin:14px 0 6px;">Message</h3>
-      <div style="white-space:normal;border:1px solid #eee;background:#fafafa;padding:10px;">${msgHtml}</div>
-      <p style="color:#666;margin-top:12px;">TS (device): ${data.ts ?? 'n/a'}<br>Received: ${new Date().toISOString()}</p>
+      <div style="white-space:normal;border:1px solid #eee;background:#fafafa;padding:10px;">${(data.msg || '').replace(/\n/g, '<br>')}</div>
+      <p style="color:#666;margin-top:12px;">TS (device): ${data.ts ?? 'n/a'}<br>Received: ${new Date(receivedAt).toISOString()}</p>
     </div>
   `;
 
-  // gmail transporter
   const transporter = nodemailer.createTransport({
     service: 'gmail',
-    auth: {
-      user: process.env.SMTP_USER, // gmail address
-      pass: process.env.SMTP_PASS  // 16-char app password
-    }
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
   });
 
   try {
     await transporter.verify();
-    const info = await transporter.sendMail({
+    await transporter.sendMail({
       from: process.env.MAIL_FROM || process.env.SMTP_USER,
       to: process.env.MAIL_TO,
-      subject,
-      text,
-      html
+      subject, text, html
     });
-    console.log('Email accepted:', info);
-    return res.status(200).json({ ok: true });
   } catch (e) {
     console.error('Email error:', e);
-    return res.status(500).json({ ok: false, error: e?.message || String(e) });
+    // don't fail webhook just for email
   }
+
+  return res.status(200).json({ ok: true });
 }
