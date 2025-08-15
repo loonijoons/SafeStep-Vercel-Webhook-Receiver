@@ -1,5 +1,6 @@
 // /api/alert.js
 import nodemailer from 'nodemailer';
+//
 
 // try to extract metrics. prefer structured fields if present; otherwise parse from msg text.
 function parseMetrics(data) {
