@@ -53,7 +53,7 @@ export default async function handler(req, res) {
     metrics                 // temp/humidity/steps/heartRate
   };
 
-  // ---- write to KV (keep last 50) ----
+  // keep last 50 entries
   let kvOk = false;
   try {
     await kv.lpush('events', JSON.stringify(entry));
@@ -64,7 +64,7 @@ export default async function handler(req, res) {
     console.error('[KV] store error:', e);
   }
 
-  // ---- email via Gmail (unchanged) ----
+  // email
   const subject = `Device Alert: ${event}`;
   const text = [
     `EVENT: ${event}`,
