@@ -1,21 +1,49 @@
+// /api/alert.js
+import nodemailer from 'nodemailer';
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
+  // verify the shared secret from the ESP32
   const secret = req.headers['x-webhook-secret'];
   if (secret !== process.env.WEBHOOK_SECRET) return res.status(403).send('Forbidden');
 
+  // parse JSON
   const data = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
 
-  // IFTTT message
-  const text = `EVENT: ${data.event}\nMSG: ${data.msg}\nTS: ${data.ts}`;
+  // build email
+  const subject = `Device Alert: ${data.event || 'unknown'}`;
+  const text = [
+    `EVENT: ${data.event}`,
+    `MSG: ${data.msg}`,
+    `TS: ${data.ts}`
+  ].join('\n');
 
-  // send to IFTTT Webhooks (value1/2/3 are optional)
-  const url = `https://maker.ifttt.com/trigger/${process.env.IFTTT_EVENT}/json/with/key/${process.env.IFTTT_KEY}`;
-  await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ value1: text, value2: data.event, value3: JSON.stringify(data) })
-  }).catch(() => { /* swallow errors; we still 200 so device won't storm */ });
+  // render html table
+  const html = `<pre>${text}</pre>`;
+
+  // create SMTP transport
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    }
+  });
+
+  try {
+    await transporter.sendMail({
+      from: process.env.MAIL_FROM,
+      to: process.env.MAIL_TO,
+      subject,
+      text,
+      html
+    });
+  } catch (err) {
+    console.error('Email send error:', err);
+  }
 
   return res.status(200).json({ ok: true });
 }
