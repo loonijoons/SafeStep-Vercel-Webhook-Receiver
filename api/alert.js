@@ -1,8 +1,7 @@
 // /api/alert.js
 import nodemailer from 'nodemailer';
-import { kv } from '@vercel/kv';
 
-// extract only temp, humidity, steps, heartRate
+// ---- biometrics: temp, humidity, steps, heartRate only ----
 function parseMetrics(data) {
   const metrics = {
     tempC:     data.tempC ?? null,
@@ -32,26 +31,6 @@ function parseMetrics(data) {
   return metrics;
 }
 
-function metricsTableHTML(m) {
-  const rows = [];
-  const add = (k, v) => v != null && v !== '' && rows.push(
-    `<tr><td style="padding:6px 10px;border:1px solid #ddd;"><b>${k}</b></td><td style="padding:6px 10px;border:1px solid #ddd;">${v}</td></tr>`
-  );
-
-  const tempText = [
-    m.tempC != null ? `${Number(m.tempC).toFixed(2)} °C` : null,
-    m.tempF != null ? `${Number(m.tempF).toFixed(2)} °F` : null
-  ].filter(Boolean).join(' / ');
-
-  if (tempText) add('Temperature', tempText);
-  if (m.humidity != null)  add('Humidity', `${Number(m.humidity).toFixed(2)} %`);
-  if (m.steps != null)     add('Steps', `${m.steps}`);
-  if (m.heartRate != null) add('Heart Rate', `${Number(m.heartRate).toFixed(1)} bpm`);
-
-  if (!rows.length) return '';
-  return `<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #ddd;margin:10px 0;">${rows.join('')}</table>`;
-}
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
@@ -64,29 +43,17 @@ export default async function handler(req, res) {
   const receivedAt = Date.now();
   const metrics = parseMetrics(data);
 
-  // keep last 50 for database
-  const entry = {
+  // ---- store last event in memory (volatile) ----
+  globalThis.__lastEvent = {
     id: `${receivedAt}-${Math.random().toString(36).slice(2, 8)}`,
     event,
     msg: data.msg || '',
-    ts: data.ts ?? null,
-    receivedAt,
-    metrics
+    ts: data.ts ?? null,   // device timestamp
+    receivedAt,            // server timestamp
+    metrics                // {tempC,tempF,humidity,steps,heartRate}
   };
 
-  // keep last 50 entries
-  let kvOk = false;
-  try {
-    await kv.lpush('events', JSON.stringify(entry));
-    await kv.ltrim('events', 0, 49);
-    kvOk = true;
-    console.log('[KV] Stored entry', entry.id);
-  } catch (e) {
-    console.error('[KV] store error:', e);
-    // continue; we still send email
-  }
-
-  // email
+  // ---- email (Gmail App Password) ----
   const subject = `Device Alert: ${event}`;
   const text = [
     `EVENT: ${event}`,
@@ -98,7 +65,12 @@ export default async function handler(req, res) {
   const html = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;">
       <h2 style="margin:0 0 8px;">Device Alert: ${event}</h2>
-      ${metricsTableHTML(metrics)}
+      <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #ddd;margin:10px 0;">
+        ${metrics.tempC!=null||metrics.tempF!=null ? `<tr><td style="padding:6px 10px;border:1px solid #ddd;"><b>Temperature</b></td><td style="padding:6px 10px;border:1px solid #ddd;">${[metrics.tempC!=null?metrics.tempC.toFixed(2)+' °C':null, metrics.tempF!=null?metrics.tempF.toFixed(2)+' °F':null].filter(Boolean).join(' / ')}</td></tr>`:''}
+        ${metrics.humidity!=null ? `<tr><td style="padding:6px 10px;border:1px solid #ddd;"><b>Humidity</b></td><td style="padding:6px 10px;border:1px solid #ddd;">${metrics.humidity.toFixed(2)} %</td></tr>`:''}
+        ${metrics.steps!=null ? `<tr><td style="padding:6px 10px;border:1px solid #ddd;"><b>Steps</b></td><td style="padding:6px 10px;border:1px solid #ddd;">${metrics.steps}</td></tr>`:''}
+        ${metrics.heartRate!=null ? `<tr><td style="padding:6px 10px;border:1px solid #ddd;"><b>Heart Rate</b></td><td style="padding:6px 10px;border:1px solid #ddd;">${metrics.heartRate.toFixed(1)} bpm</td></tr>`:''}
+      </table>
       <h3 style="margin:14px 0 6px;">Message</h3>
       <div style="white-space:normal;border:1px solid #eee;background:#fafafa;padding:10px;">${(data.msg || '').replace(/\n/g, '<br>')}</div>
       <p style="color:#666;margin-top:12px;">TS (device): ${data.ts ?? 'n/a'}<br>Received: ${new Date(receivedAt).toISOString()}</p>
@@ -121,5 +93,6 @@ export default async function handler(req, res) {
     console.error('Email error:', e);
   }
 
-  return res.status(200).json({ ok: true, kvOk });
+  res.setHeader('Cache-Control', 'no-store');
+  return res.status(200).json({ ok: true });
 }
