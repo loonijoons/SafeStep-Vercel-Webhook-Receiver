@@ -95,11 +95,17 @@ export default async function handler(req, res) {
 
   try {
     await transporter.verify();
+    const toEmail = (process.env.MAIL_TO || '').trim();   // e.g. family_member@gmail.com
+    const toSms   = (process.env.SMS_TO  || '').trim();   // e.g. 1234567890@txt.att.net
+    const toCombined = [toEmail, toSms].filter(Boolean).join(',');
+
     await transporter.sendMail({
       from: process.env.MAIL_FROM || process.env.SMTP_USER,
-      to: process.env.MAIL_TO,
-      subject, text, html
-    });
+      to: toCombined,
+      subject,
+      text,
+      html
+  });
   } catch (e) {
     console.error('Email error:', e);
   }
