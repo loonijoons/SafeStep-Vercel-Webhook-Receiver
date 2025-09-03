@@ -14,7 +14,8 @@ function parseMetrics(data) {
   const msg = typeof data.msg === 'string' ? data.msg : '';
 
   if ((metrics.tempC == null || metrics.tempF == null) && msg) {
-    const m = msg.match(/Temp:\s*([\d.]+)\s*C\s*\/\s*([\d.]+)\s*F/i);
+    // accept "Temp:" OR "Temperature:"
+    const m = msg.match(/Temp(?:erature)?:\s*([\d.]+)\s*C\s*\/\s*([\d.]+)\s*F/i);
     if (m) { metrics.tempC = parseFloat(m[1]); metrics.tempF = parseFloat(m[2]); }
   }
   if (metrics.humidity == null && msg) {
