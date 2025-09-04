@@ -2,6 +2,7 @@
 import nodemailer from 'nodemailer';
 import { kv } from '@vercel/kv';
 
+// parse json payload
 function parseMetrics(data) {
   const metrics = {
     tempC:     data.tempC ?? null,
@@ -33,6 +34,7 @@ function parseMetrics(data) {
   return metrics;
 }
 
+// build table for email
 function metricsTableHTML(m) {
   const rows = [];
   const add = (k, v) => v != null && v !== '' && rows.push(
@@ -53,6 +55,7 @@ function metricsTableHTML(m) {
   return `<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #ddd;margin:10px 0;">${rows.join('')}</table>`;
 }
 
+// main api handler method. parse json, build object and send alerts
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
@@ -74,6 +77,7 @@ export default async function handler(req, res) {
     metrics
   };
 
+// ignore, was for webpage showing alerts that never got finished
   let kvOk = false;
   try {
     await kv.lpush('events', JSON.stringify(entry));
@@ -83,7 +87,9 @@ export default async function handler(req, res) {
   } catch (e) {
     console.error('[KV] store error:', e);
   }
+// ignore
 
+  // build alert
   const subject = `Device Alert: ${event}`;
   const text = [
     `EVENT: ${event}`,
@@ -92,6 +98,7 @@ export default async function handler(req, res) {
     `Received: ${new Date(receivedAt).toISOString()}`
   ].join('\n');
 
+  // email formatting
   const html = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;color:#111;">
       <h2 style="margin:0 0 8px;">Device Alert: ${event}</h2>
@@ -154,7 +161,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // discord alert
+    // discord webhook
     async function sendDiscord(text) {
       const urlsRaw = process.env.DISCORD_WEBHOOK_URLS || process.env.DISCORD_WEBHOOK_URL || '';
       const urls = urlsRaw.split(',').map(s => s.trim()).filter(Boolean);
@@ -174,6 +181,7 @@ export default async function handler(req, res) {
       }
     }
 
+    // discord alert
     const discordTextParts = [
       `ALERT: ${event}`,
       (metrics.tempC!=null||metrics.tempF!=null)
@@ -190,6 +198,7 @@ export default async function handler(req, res) {
     console.error('Email/Discord error:', e);
   }
 
+  // api response for debugging
   res.setHeader('Cache-Control', 'no-store');
   return res.status(200).json({ ok: true, kvOk });
 }
