@@ -2,9 +2,7 @@
 import nodemailer from 'nodemailer';
 import { kv } from '@vercel/kv';
 
-// ---------- helpers ----------
 function parseMetrics(data) {
-  // Prefer structured fields if provided
   const metrics = {
     tempC:     data.tempC ?? null,
     tempF:     data.tempF ?? null,
@@ -15,7 +13,6 @@ function parseMetrics(data) {
 
   const msg = typeof data.msg === 'string' ? data.msg : '';
 
-  // Temp: accept "Temp:" OR "Temperature:"
   if ((metrics.tempC == null || metrics.tempF == null) && msg) {
     const m = msg.match(/Temp(?:erature)?:\s*([\d.]+)\s*C\s*\/\s*([\d.]+)\s*F/i);
     if (m) { metrics.tempC = parseFloat(m[1]); metrics.tempF = parseFloat(m[2]); }
@@ -56,27 +53,6 @@ function metricsTableHTML(m) {
   return `<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #ddd;margin:10px 0;">${rows.join('')}</table>`;
 }
 
-// Send compact phone-friendly line to Discord (free push)
-async function sendDiscord(text) {
-  const urlsRaw = process.env.DISCORD_WEBHOOK_URLS || process.env.DISCORD_WEBHOOK_URL || '';
-  const urls = urlsRaw.split(',').map(s => s.trim()).filter(Boolean);
-  if (!urls.length) return;
-
-  for (const url of urls) {
-    try {
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: text })
-      });
-      console.log('[Discord]', resp.status);
-    } catch (e) {
-      console.error('[Discord error]', e?.message || e);
-    }
-  }
-}
-
-// ---------- handler ----------
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
@@ -89,17 +65,15 @@ export default async function handler(req, res) {
   const receivedAt = Date.now();
   const metrics = parseMetrics(data);
 
-  // Build entry for homepage
   const entry = {
     id: `${receivedAt}-${Math.random().toString(36).slice(2, 8)}`,
     event,
     msg: data.msg || '',
-    ts: data.ts ?? null,      // device ms (if provided)
-    receivedAt,               // server ms
-    metrics                   // temp/humidity/steps/heartRate only
+    ts: data.ts ?? null,
+    receivedAt,
+    metrics
   };
 
-  // Persist to KV (keep last 50)
   let kvOk = false;
   try {
     await kv.lpush('events', JSON.stringify(entry));
@@ -110,7 +84,6 @@ export default async function handler(req, res) {
     console.error('[KV] store error:', e);
   }
 
-  // Email via Gmail (App Password)
   const subject = `Device Alert: ${event}`;
   const text = [
     `EVENT: ${event}`,
@@ -137,7 +110,7 @@ export default async function handler(req, res) {
   try {
     await transporter.verify();
 
-    // 1) Full email to normal recipients
+    // email alert
     const toEmail = (process.env.MAIL_TO || '').trim();
     if (toEmail) {
       const infoEmail = await transporter.sendMail({
@@ -148,14 +121,13 @@ export default async function handler(req, res) {
       console.log('[EMAIL] accepted:', infoEmail.accepted, 'rejected:', infoEmail.rejected);
     }
 
-    // 2) Optional: short messages to any email→SMS addresses (some carriers may drop)
+    // email to SMS (phone alert)
     const smsList = (process.env.SMS_TO || '')
       .split(',')
       .map(s => s.trim())
       .filter(Boolean);
 
     if (smsList.length) {
-      // very compact, single line (gateways often truncate around 160 chars)
       const smsTextParts = [
         `ALERT: ${event}`,
         (metrics.tempC!=null||metrics.tempF!=null)
@@ -172,7 +144,7 @@ export default async function handler(req, res) {
           const infoSms = await transporter.sendMail({
             from: process.env.MAIL_FROM || process.env.SMTP_USER,
             to: r,
-            subject: `ALERT: ${event}`, // many gateways ignore subject
+            subject: `ALERT: ${event}`,
             text: smsText
           });
           console.log('[SMS] to', r, 'accepted:', infoSms.accepted, 'rejected:', infoSms.rejected);
@@ -182,7 +154,26 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3) Free push to Discord
+    // discord alert
+    async function sendDiscord(text) {
+      const urlsRaw = process.env.DISCORD_WEBHOOK_URLS || process.env.DISCORD_WEBHOOK_URL || '';
+      const urls = urlsRaw.split(',').map(s => s.trim()).filter(Boolean);
+      if (!urls.length) return;
+
+      for (const url of urls) {
+        try {
+          const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: text })
+          });
+          console.log('[Discord]', resp.status);
+        } catch (e) {
+          console.error('[Discord error]', e?.message || e);
+        }
+      }
+    }
+
     const discordTextParts = [
       `ALERT: ${event}`,
       (metrics.tempC!=null||metrics.tempF!=null)
@@ -197,10 +188,9 @@ export default async function handler(req, res) {
 
   } catch (e) {
     console.error('Email/Discord error:', e);
-    // continue; we still return 200 so the device won't keep retrying aggressively
   }
 
   res.setHeader('Cache-Control', 'no-store');
   return res.status(200).json({ ok: true, kvOk });
 }
-//
+
